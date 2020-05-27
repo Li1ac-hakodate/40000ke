@@ -7,3 +7,5 @@ Discord Python bot project.
 고1이 개발하는 봇.
 
 지적, 언제나 환영합니다
+
+helllo
