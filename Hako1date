@@ -1,0 +1,451 @@
+# -*- coding: utf-8 -*-
+
+import os
+import time
+import json
+import aiohttp
+import asyncio
+import logging
+import subprocess
+
+import discord
+from bs4 import BeautifulSoup
+from subprocess import PIPE, STDOUT
+#################################################################################
+# Logger Setting
+log_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s]: %(message)s",
+    "%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+boot_time = time.strftime("%Y-%m-%d %HH %MM", time.localtime(time.time()))
+try:
+    file_handler = logging.FileHandler(f"log/{boot_time}.log")
+    file_handler.setFormatter(log_formatter)
+    logger.addHandler(file_handler)
+except FileNotFoundError:
+    os.mkdir("log/")
+    file_handler = logging.FileHandler(f"log/{boot_time}.log")
+    file_handler.setFormatter(log_formatter)
+    logger.addHandler(file_handler)
+del boot_time
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+logger.addHandler(console_handler)
+##################################################################################
+client = discord.Client()
+
+
+class CleanChat:
+    def __init__(self, message, lang):
+        self.lang = lang
+        self.message = message
+        try:
+            self.amount = self.message.content.split()[1]
+        except IndexError:
+            self.amount = None
+
+        self.msg = {
+            "ko": {
+                "error": {
+                    "no-data": "잘못된 명령어 사용법!",
+                    "not-int": "이건 숫자가 아닌데요?",
+                    "no-perm": "이런! 권한이 부족한 것 같아요."
+                },
+                "success": {
+                    "head": "「당신의 요청은 매우 혁명적인 방법으로 처리되었습니다」",
+                    "body": f"{str(self.message.author)}님에 의해 메세지 {self.amount} 개가 청소되었습니다.",
+                }
+            },
+            "maybe-ko": {
+                "error": {
+                    "no-data": "그것은 매우 잘못된 사용 명령어",
+                    "not-int": "당신은 이것을 숫자를 보는?",
+                    "no-perm": "권한이 부족한 것 같아요. UwU"
+                },
+                "success": {
+                    "head": "「채팅방이 북! 딱!」",
+                    "body": f"{str(self.message.author)}이라는 빌런에 의해 메세지 {self.amount}개가 타노슨되었다.",
+                }
+            },
+            "jp": {
+                "error": {
+                    "no-data": "命令が間違っているようです。",
+                    "not-int": "数字が入力されていないようですが。",
+                    "no-perm": "権限が不足しているようです。 権限設定後、もう一度やってみますか?"
+                },
+                "success": {
+                    "head": "「要請した項目が処理されました。」",
+                    "body": f"{str(self.message.author)}, {self.amount} を処理しました。.",
+                }
+            }
+        }
+
+    async def purge(self):
+        if self.amount is None:
+            embed = discord.Embed(title="ERROR..", description=self.msg[self.lang]['error']['no-data'], color=0xff0000)
+            await self.message.channel.send(embed=embed)
+            return
+
+        if isinstance(self.amount, int):
+            embed = discord.Embed(title="ERROR..", description=self.msg[self.lang]['error']['not-int'], color=0xff0000)
+            await self.message.channel.send(embed=embed)
+            return
+
+        try:
+            await self.message.channel.purge(limit=int(self.amount))
+            embed = discord.Embed(title=self.msg[self.lang]['success']['head'],
+                                  description=self.msg[self.lang]['success']['body'], color=0xff0000)
+            await self.message.channel.send(embed=embed)
+        except discord.errors.Forbidden:
+            embed = discord.Embed(title="ERROR..", description=self.msg[self.lang]['error']['no-perm'], color=0xff0000)
+            await self.message.channel.send(embed=embed)
+        return
+
+
+class GetItem:
+    def __init__(self, url):
+        self.url = url
+
+    async def get_json(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.url) as resp:
+                return await resp.json()
+
+    async def get_html(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(self.url) as resp:
+                return await resp.text()
+
+
+@client.event
+async def on_ready():
+    logger.info('-' * 50)
+    logger.info(f"디스코드 봇 로그인이 완료되었습니다.")
+    logger.info(f"봇 이름: {client.user}")
+    logger.info(f"봇   ID: {client.user.id}")
+    logger.info('-'*50)
+    logger.info(f"총 {len(client.guilds)}개의 방에 들어가있음")
+    guilds, result = list(client.guilds), list()
+    for temp_guild in guilds:
+        t_d = {'id': temp_guild.id, 'name': temp_guild.name}
+        result.append(t_d)
+    with open("guild.json", "w", encoding="utf8") as guild:
+        guild.write(json.dumps(result, sort_keys=True, indent=4))
+    logger.info(" 자세한 정보 -> guild.json")
+    logger.info('-' * 50)
+    while True:
+        await client.change_presence(status=discord.Status.idle, activity=discord.Game("Drinking tea leisurely in Hakodate"))
+        await client.change_presence(status=discord.Status.idle, activity=discord.Game("Prefix - >"))
+        await asyncio.sleep(5.0)
+
+
+@client.event
+async def on_message(message):
+    if message.author.bot or isinstance(message.channel, discord.abc.PrivateChannel):
+        return
+
+    if client.user.mentioned_in(message):
+        if str(client.user.id) in message.content:
+            logger.info(f"[{message.author.id}]{message.author}에게 멘션 당했다... UwU")
+
+            reservations = "https://jrhokkaidonorikae.com/pc/cgi/result.cgi?search_target=route&search_way=time" \
+                           "&sum_target=7&faretype=2&jr=on&privately=on&dep_node=%E6%96%B0%E5%8D%83%E6%AD%B3%E7%A9%BA" \
+                           "%E6%B8%AF&arv_node=%E5%87%BD%E9%A4%A8&via_node01=&via_node02=&via_node03=&year=2020&month" \
+                           "=05&day=28&hour=10&minute=47&search_type=departure&sort=time&max_route=5&nearexpress=on" \
+                           "&sprexprs=on&utrexprs=on&exprs=on&slputr=on&slpexprs=on&sprnozomi=on&transfer=normal "
+            embed = discord.Embed(title="Would you like to visit Hakodate?",
+                                  description=f"Reservations for trains from Shin-Chitose Airport to Hakodate are available [here]({reservations}"
+                                              "). More can be found [here](https://www.jrhokkaido.co.jp).",
+                                  color=0x26c920)
+            await message.channel.send(embed=embed)
+            try:
+                await message.delete()
+            except discord.errors.Forbidden:
+                pass
+        return
+
+    if message.content.startswith('>YahooLiveChart'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        worker = GetItem("https://search.yahoo.co.jp/realtime/search;?p=a")
+        html = await worker.get_html()
+        embed = discord.Embed(title='[Yahoo Live Chart]', color=0x26c920)
+        for i in range(20):
+            cache1_html = html.split('<div><span>' + str(i + 1) + '</span>')[1]
+            data_cache = cache1_html.split('">')[1].split('</a>')[0]
+            embed.add_field(name=f"{i+1} -", value=data_cache)
+        await message.channel.send(embed=embed)
+        return
+
+    if message.content.startswith('>실시간검색어'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        worker = GetItem("https://m.search.naver.com/search.naver?query=%EC%8B%A4%EC%8B%9C%EA%B0%84%20%EA%B2%80%EC%83%89%EC%96%B4")
+        html = await worker.get_html()
+
+        data = html.split('span class="tit _keyword">')
+        embed = discord.Embed(title='[네이버 실시간 검색어 순위]', color=0x00aa00)
+        for i in range(20):
+            data_cache = data[i + 1].split('</span>')[0]
+            embed.add_field(name=f"{i+1}위", value=data_cache)
+        await message.channel.send(embed=embed)
+        return
+
+    if message.content.startswith(">NAGANO"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        await message.channel.send("DENTETSU")
+        return
+
+    if message.content.startswith("Hakodate"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="Pleack cheak your Direct Message.", description="私はあなたにDMでHakodateのヘルプを送ったよ。",
+                              color=0x00aaaa)
+        await message.channel.send(embed=embed)
+
+        embed = discord.Embed(title="도움말", colour=0xBFE5E8)
+        embed.add_field(name=">k_help", value=' - 명령어를 알려드립니다.', inline=False)
+        embed.add_field(name=">청소 {청소할 메세지 갯수}", value=' - 사용자가 지정한만큼 메세지를 삭제합니다.', inline=False)
+        embed.add_field(name=">문의", value=' - 문의, 또는 건의사항이 있으신가요? 연락처를 제공합니다.', inline=False)
+        embed.add_field(name=">botinfo", value=' - 봇의 상세정보를 알려드립니다.', inline=False)
+        embed.add_field(name=">19사이트모음", value=' - **반드시 nsfw 방에서만 사용하십시오!!**', inline=False)
+        embed.add_field(name=">실시간검색어", value=' - 네이버의 현재 실검을 불러옵니다.', inline=False)
+
+        await message.author.send(embed=embed)
+        return
+    if message.content.startswith(">개발자소개"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="미친놈입니다", description="아니 진짜 미친놈이라고밖엔 설명이 안되는걸요", color=0x00aaaa)
+        await message.channel.send(embed=embed)
+        return
+    if message.content == ">愛は嫌いだ":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="愛は嫌いだ", description="「妄想鑑賞対象連盟 中。 https://www.youtube.com/watch?v=Srj4FPLJe5g」",
+                              color=0x00aaaa)
+        await message.channel.send(embed=embed)
+    if message.content == ">페도라32라이젠3000호환성이슈기원":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="봉준호님", description="「제사장이 코앞인데~」", color=0x00aaaa)
+        await message.channel.send(embed=embed)
+    if message.content == ">playlist":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="개발자 플레이리스트", colour=0xBFE5E8)
+        embed.add_field(name="당신은 이스터에그를 하나 찾으셨군요, 축하드립니다!", value=' - 답례로, 제가 듣는 플레이리스트를 알려드리겠습니다!', inline=False)
+        embed.add_field(name="Youtube", value=' - https://www.youtube.com/playlist?list=PLdozOP2AiDeE0s04kZF45oEYDb_C4pZZj', inline=False)
+        embed.add_field(name="Spotify", value=' - https://open.spotify.com/playlist/3xzpUSFePToeVYvhIdMPGj?si=Fsr5epSYQ8WNgElTKOQ4LA', inline=False)
+        await message.channel.send(embed=embed)
+    if message.content == ">開発者":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="問い合わせ事項がありますか?", description="問い合わせ事項及び提案事項は자올#0818にご連絡下さい",
+                              color=0xf9a0f8)
+        await message.channel.send(embed=embed)
+    if message.content == ">나이":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="장난하냐?", description="아무리 허본좌라도 니 나이는 모른다.", color=0xf9a0f8)
+        await message.channel.send(embed=embed)
+    if message.content == ">help":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="Are You Korean? Japanese?", description="Kor Help -> >k_help, JP Help -> >J_help",
+                              color=0x00aaaa)
+        await message.channel.send(embed=embed)
+    if message.content == ">k_help":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="도움말", color=0xBFE5E8)
+        embed.add_field(name=">k_help", value=' - 명령어를 알려드립니다.', inline=False)
+        embed.add_field(name=">청소 {청소할 메세지 갯수}", value=' - 사용자가 지정한만큼 메세지를 삭제합니다.', inline=False)
+        embed.add_field(name=">문의", value=' - 문의, 또는 건의사항이 있으신가요? 연락처를 제공합니다.', inline=False)
+        embed.add_field(name=">botinfo", value=' - 봇의 상세정보를 알려드립니다.', inline=False)
+        embed.add_field(name=">19사이트모음", value=' - **반드시 nsfw 방에서만 사용하십시오!!**', inline=False)
+        embed.add_field(name=">실시간검색어", value=' - 네이버의 현재 실검을 불러옵니다.', inline=False)
+        await message.channel.send(embed=embed)
+    if message.content == ">J_help":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="ヘルプ", color=0xBFE5E8)
+        embed.add_field(name=">J_help", value=' - ヘルプを表示します。', inline=False)
+        embed.add_field(name=">clear {消すことがメッセージ数}", value=' - チャットウィンドウのメッセージをユーザーが指定した分だけ削除します。', inline=False)
+        embed.add_field(name=">開発者", value=' - 本自動応答ボットの開発者を確認します。', inline=False)
+        embed.add_field(name=">botinfo", value=' - 本自動応答ボットの詳細情報を確認します。', inline=False)
+        embed.add_field(name=">YahooLiveChart", value=' - ヤフーのリアルタイム検索ワードチャートを読み込みます。', inline=False)
+        await message.channel.send(embed=embed)
+    if message.content == ">botinfo":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        embed = discord.Embed(title="Bot info.", color=0xBFE5E8)
+        embed.add_field(name="Bot Ver.", value='Ver.0.13 7XW', inline=True)
+        embed.add_field(name="Firm ", value=' TEST/R " X', inline=True)
+        embed.add_field(name="Developer", value='자올#0818', inline=False)
+        await message.channel.send(embed=embed)
+    if message.content == ">19사이트모음":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        if not message.channel.is_nsfw():
+            await message.author.send("그곳에서 쓰는거 아니다 ^^7")
+            return
+
+        embed = discord.Embed(title="어떤 취향이십니까?", description="```망가는 >19manga, 실사물은 >19video 를 사용해주십시오.```", color=0x00aaaa)
+        await message.channel.send(embed=embed)
+    if message.content == ">19manga":
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        if not message.channel.is_nsfw():
+            await message.author.send("그곳에서 쓰는거 아니다 ^^7")
+            return
+
+        embed = discord.Embed(title="19만화사이트 모음입니다.", color=0xBFE5E8)
+        embed.add_field(name="Hitomi", value='https://hitomi.la', inline=False)
+        embed.add_field(name="hiyobi", value='https://hiyobi.me', inline=False)
+        embed.add_field(name="Hikomi", value='https://hikomi.la', inline=False)
+        embed.add_field(name="HentaiHeaven", value='https://hentaihaven.pro/', inline=False)
+        embed.add_field(name="hanime.tv", value='https://hanime.tv/', inline=False)
+        embed.add_field(name="K258059", value='https://k258059.net/', inline=False)
+        embed.add_field(name="Luscious", value='https://luscious.net/', inline=False)
+        embed.add_field(name="Nozomi.la", value='https://nozomi.la/', inline=False)
+        embed.add_field(name="nhentai", value='https://nhentai.net/', inline=False)
+        embed.add_field(name="SM People", value='https://smpeople.net/', inline=False)
+        embed.add_field(name="Sankaku Complex", value='https://www.sankakucomplex.com/', inline=False)
+        embed.add_field(name="Tsumino", value='https://www.tsumino.com/', inline=False)
+        embed.add_field(name="늑대닷컴", value='https://wfwf68.com/', inline=False)
+        await message.channel.send(embed=embed)
+    if message.content.startswith(">19video"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        if not message.channel.is_nsfw():
+            await message.author.send("그곳에서 쓰는거 아니다 ^^7")
+            return
+
+        embed = discord.Embed(title="19성인동영상 사이트 모음입니다.", color=0xBFE5E8)
+        embed.add_field(name="Pornhub", value='https://www.pornhub.com/', inline=False)
+        embed.add_field(name="Sean Cody **게이 포르노 사이트입니다. 주의하세요.**", value='https://www.seancody.com/', inline=False)
+        embed.add_field(name="Thumbzilla", value='https://www.thumbzilla.com/', inline=False)
+        embed.add_field(name="Xvideos", value='https://xvideos.com/', inline=False)
+        embed.add_field(name="xHamster", value='https://www.xhamster.desi/', inline=False)
+        embed.add_field(name="sora.la", value='https://sora1.la/', inline=False)
+        await message.channel.send(embed=embed)
+
+    if message.content.startswith(">나무위키") or message.content.startswith(">꺼무위키") or message.content.startswith(">좆무"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        try:
+            query = str(message.content).split()[1]
+            await message.channel.send(f"https://namu.wiki/w/{query}")
+        except IndexError:
+            await message.channel.send("이게 아닌데?")
+        return
+
+    if message.content.startswith(">youtube") or message.content.startswith(">유튜브") or message.content.startswith(">너튜브"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        try:
+            query = str(message.content).split()[1]
+            await message.channel.send(f"https://www.youtube.com/results?search_query={query}")
+        except IndexError:
+            await message.channel.send("%")
+        return
+
+    if message.content.startswith(">google") or message.content.startswith(">구글"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        try:
+            query = str(message.content).split()[1]
+            await message.channel.send(f"https://www.google.co.kr/search?q={query}")
+        except IndexError:
+            await message.channel.send("%")
+        return
+
+    if message.content.startswith(">twitch") or message.content.startswith(">트위치"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        try:
+            query = str(message.content).split()[1]
+            await message.channel.send(f"https://www.twitch.tv/search?term={query}")
+        except IndexError:
+            await message.channel.send("%")
+        return
+
+    if message.content.startswith(">페북") or message.content.startswith(">페이스북") or message.content.startswith('>facebook'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        try:
+            query = str(message.content).split()[1]
+            await message.channel.send(f"https://www.facebook.com/search/top/?q={query}")
+        except IndexError:
+            await message.channel.send("%")
+        return
+
+    if message.content.startswith(">트위터") or message.content.startswith(">twitter") or message.content.startswith('>페미광장'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        try:
+            query = str(message.content).split()[1]
+            await message.channel.send(f"https://twitter.com/search?q={query}")
+        except IndexError:
+            await message.channel.send("%")
+        return
+
+    # if (m.startswith('>ㅇㅂ')):
+    #     await message.channel.send("https://www.ilbe.com/search?docType=doc&searchType=title_content&page=1&q=" + ms[1])
+
+    if message.content.startswith('>청소'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        worker = CleanChat(message, "ko")
+        await worker.purge()
+        return
+    if message.content.startswith('>clear'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        worker = CleanChat(message, "jp")
+        await worker.purge()
+        return
+    if message.content.startswith('>타노슨'):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        worker = CleanChat(message, "maybe-ko")
+        await worker.purge()
+        return
+
+    if message.content.startswith(">날씨"):
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 명령어를 [{message.guild.id}] 에서 사용함")
+        wait_msg = await message.channel.send('新千歳空港から『快速エアポート』列車で札幌駅経由で函館に行かれると、もっと楽に旅できます。')
+        query = str(message.content[len(">날씨"):])
+
+        worker = GetItem(f"https://search.naver.com/search.naver?query={query.replace(' ', '+')}날씨")
+        html = await worker.get_html()
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        data1 = soup.find('div', {'class': 'detail_box'})
+        data2 = data1.findAll('dd')
+
+        fine_dust = data2[0].text
+        ultra_fine_dust = data2[1].text
+
+        ohjon = data2[2].text
+        chegam = soup.find('span', {'class': 'sensible'}).text
+        jawisun = soup.find('span', {'class': 'indicator'}).text
+
+        data3 = soup.find('div', {'class': 'main_info'})
+        data4 = data3.findAll('span')
+        C = data4[1].text
+
+        data5 = soup.find('span', {'class': 'btn_select'})
+        data6 = data5.findAll('em')[0].text
+
+        try:
+            await wait_msg.delete()
+        except discord.errors.Forbidden:
+            # 메세지 삭제 실패 권한 오류
+            pass
+
+        embed = discord.Embed(title=f"{data6} 의 날씨입니다.", color=0xfcb1f6)
+        embed.add_field(name="기온", value=str(C) + "˚C")
+        embed.add_field(name="미세먼지", value=str(fine_dust))
+        embed.add_field(name="초미세먼지", value=str(ultra_fine_dust))
+        embed.add_field(name="오존지수", value=str(ohjon))
+        embed.add_field(name="자외선지수", value=str(jawisun))
+        embed.add_field(name="체감온도", value=str(chegam[4:]) + 'C')
+        await message.channel.send(embed=embed)
+        return
+
+    # 필터
+    if "끼헦헦헦헦헦" in message.content:
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 단어를 [{message.guild.id}] 에서 사용함")
+        await message.channel.send("끼헦헦헦헦헦헦헦헦(어이상실)")
+        return
+    if "노무현" in message.content:
+        logger.info(f"[{message.author.id}]{message.author} 가 [{message.content}] 라는 단어를 [{message.guild.id}] 에서 사용함")
+        await message.channel.send(
+            "https://www.youtube.com/watch?v=u9hGFeBO4T8&list=PLFCdlMwym996PEczmAVX-ZOczOQpicbp-&index=11&t=0s 들어보쉴? (드디어 미침)")
+        return
+
+
+client.run(json.load(open("token.json"))['token'])
+
